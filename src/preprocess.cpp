@@ -317,6 +317,7 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
       }
     }
 
+    //* velodyne is false
     if(feature_enabled)
     {
       for (int i = 0; i < N_SCANS; i++)
@@ -406,8 +407,8 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
         added_pt.y = pl_orig.points[i].y;
         added_pt.z = pl_orig.points[i].z;
         added_pt.intensity = pl_orig.points[i].intensity;
-        added_pt.curvature = pl_orig.points[i].time * time_unit_scale;  // curvature unit: ms // cout<<added_pt.curvature<<endl;
-
+        added_pt.curvature = pl_orig.points[i].time * time_unit_scale;  // curvature unit: ms // cout<<added_pt.curvature<<endl;  // !相对时间戳，微秒
+        // 无相对时间戳的处理
         if (!given_offset_time)
         {
           int layer = pl_orig.points[i].ring;
@@ -440,6 +441,9 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
           time_last[layer]=added_pt.curvature;
         }
 
+        // for velodyne
+        // point_filter_num is: 4 每隔4个点取一个
+        // blind is: 2 盲区以内的不要
         if (i % point_filter_num == 0)
         {
           if(added_pt.x*added_pt.x+added_pt.y*added_pt.y+added_pt.z*added_pt.z > (blind * blind))

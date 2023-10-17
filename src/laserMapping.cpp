@@ -288,7 +288,7 @@ void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
 
     PointCloudXYZI::Ptr  ptr(new PointCloudXYZI());
     p_pre->process(msg, ptr);
-    lidar_buffer.push_back(ptr);
+    lidar_buffer.push_back(ptr);    // buffer数据帧
     time_buffer.push_back(msg->header.stamp.toSec());
     last_timestamp_lidar = msg->header.stamp.toSec();
     s_plot11[scan_count] = omp_get_wtime() - preprocess_start_time;
@@ -338,6 +338,7 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
     // cout<<"IMU got at: "<<msg_in->header.stamp.toSec()<<endl;
     sensor_msgs::Imu::Ptr msg(new sensor_msgs::Imu(*msg_in));
 
+    // time_diff_lidar_to_imu : 0
     msg->header.stamp = ros::Time().fromSec(msg_in->header.stamp.toSec() - time_diff_lidar_to_imu);
     if (abs(timediff_lidar_wrt_imu) > 0.1 && time_sync_en)
     {
@@ -357,20 +358,21 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
 
     last_timestamp_imu = timestamp;
 
-    imu_buffer.push_back(msg);
+    imu_buffer.push_back(msg);  // buffer imu
     mtx_buffer.unlock();
     sig_buffer.notify_all();
 }
 
 double lidar_mean_scantime = 0.0;
 int    scan_num = 0;
+// 打包激光扫描时间段内的imu数据
 bool sync_packages(MeasureGroup &meas)
 {
     if (lidar_buffer.empty() || imu_buffer.empty()) {
         return false;
     }
 
-    /*** push a lidar scan ***/
+    /*** push a lidar scan ***/ // default value is 0 
     if(!lidar_pushed)
     {
         meas.lidar = lidar_buffer.front();
@@ -773,7 +775,7 @@ int main(int argc, char** argv)
     nh.param<double>("mapping/acc_cov",acc_cov,0.1);
     nh.param<double>("mapping/b_gyr_cov",b_gyr_cov,0.0001);
     nh.param<double>("mapping/b_acc_cov",b_acc_cov,0.0001);
-    nh.param<double>("preprocess/blind", p_pre->blind, 0.01);
+    nh.param<double>("preprocess/blind", p_pre->blind, 0.01);   
     nh.param<int>("preprocess/lidar_type", p_pre->lidar_type, AVIA);
     nh.param<int>("preprocess/scan_line", p_pre->N_SCANS, 16);
     nh.param<int>("preprocess/timestamp_unit", p_pre->time_unit, US);

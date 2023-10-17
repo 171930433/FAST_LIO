@@ -154,6 +154,7 @@ void ImuProcess::set_acc_bias_cov(const V3D &b_a)
   cov_bias_acc = b_a;
 }
 
+// 初始化滤波器的初始状态及方差
 void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, int &N)
 {
   /** 1. initializing the gravity, gyro bias, acc and gyro covariance
@@ -197,7 +198,7 @@ void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 
   init_state.bg  = mean_gyr;
   init_state.offset_T_L_I = Lidar_T_wrt_IMU;
   init_state.offset_R_L_I = Lidar_R_wrt_IMU;
-  kf_state.change_x(init_state);
+  kf_state.change_x(init_state);  // 初始化初始状态
 
   esekfom::esekf<state_ikfom, 12, input_ikfom>::cov init_P = kf_state.get_P();
   init_P.setIdentity();
@@ -206,7 +207,7 @@ void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 
   init_P(15,15) = init_P(16,16) = init_P(17,17) = 0.0001;
   init_P(18,18) = init_P(19,19) = init_P(20,20) = 0.001;
   init_P(21,21) = init_P(22,22) = 0.00001; 
-  kf_state.change_P(init_P);
+  kf_state.change_P(init_P);  // 初始化起始方差
   last_imu_ = meas.imu.back();
 
 }
@@ -215,7 +216,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
 {
   /*** add the imu of the last frame-tail to the of current frame-head ***/
   auto v_imu = meas.imu;
-  v_imu.push_front(last_imu_);
+  v_imu.push_front(last_imu_);  //! 因为首帧meas未处理，所以这个操作是把上一帧的尾巴，放到当前帧的头
   const double &imu_beg_time = v_imu.front()->header.stamp.toSec();
   const double &imu_end_time = v_imu.back()->header.stamp.toSec();
   const double &pcl_beg_time = meas.lidar_beg_time;
@@ -233,6 +234,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   IMUpose.push_back(set_pose6d(0.0, acc_s_last, angvel_last, imu_state.vel, imu_state.pos, imu_state.rot.toRotationMatrix()));
 
   /*** forward propagation at each imu point ***/
+  // avr : average
   V3D angvel_avr, acc_avr, acc_imu, vel_imu, pos_imu;
   M3D R_imu;
 
@@ -267,13 +269,13 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
       dt = tail->header.stamp.toSec() - head->header.stamp.toSec();
     }
     
-    in.acc = acc_avr;
-    in.gyro = angvel_avr;
+    in.acc = acc_avr; // 加速度均值
+    in.gyro = angvel_avr; // 陀螺均值
     Q.block<3, 3>(0, 0).diagonal() = cov_gyr;
     Q.block<3, 3>(3, 3).diagonal() = cov_acc;
     Q.block<3, 3>(6, 6).diagonal() = cov_bias_gyr;
     Q.block<3, 3>(9, 9).diagonal() = cov_bias_acc;
-    kf_state.predict(dt, Q, in);
+    kf_state.predict(dt, Q, in);  // 根据imu观测值预测状态和方差,预测时扣除bias
 
     /* save the poses at each IMU measurements */
     imu_state = kf_state.get_x();
@@ -284,6 +286,8 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
       acc_s_last[i] += imu_state.grav[i];
     }
     double &&offs_t = tail->header.stamp.toSec() - pcl_beg_time;
+
+    // 差值每一个imu位置处的pose
     IMUpose.push_back(set_pose6d(offs_t, acc_s_last, angvel_last, imu_state.vel, imu_state.pos, imu_state.rot.toRotationMatrix()));
   }
 
@@ -312,16 +316,26 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
 
     for(; it_pcl->curvature / double(1000) > head->offset_time; it_pcl --)
     {
+      // 距离当前待差值Twi的时间差
       dt = it_pcl->curvature / double(1000) - head->offset_time;
 
       /* Transform to the 'end' frame, using only the rotation
        * Note: Compensation direction is INVERSE of Frame's moving direction
        * So if we want to compensate a point at timestamp-i to the frame-e
        * P_compensate = R_imu_e ^ T * (R_i * P_i + T_ei) where T_ei is represented in global frame */
+      // i时刻的imu旋转 R_wi
       M3D R_i(R_imu * Exp(angvel_avr, dt));
       
-      V3D P_i(it_pcl->x, it_pcl->y, it_pcl->z);
+      // p_i: i时刻激光点位置
+      V3D P_i(it_pcl->x, it_pcl->y, it_pcl->z); 
+      // T_ei: i e 时刻的imu位置变化量 t_wi_i
       V3D T_ei(pos_imu + vel_imu * dt + 0.5 * acc_imu * dt * dt - imu_state.pos);
+      // t_ip : imu_state.offset_R_L_I * P_i + imu_state.offset_T_L_I, i时刻，待扫描点在imu坐标系下的位置
+      //  x    : R_i * (t_ip) + T_ei
+      //  y   : imu_state.rot.conjugate() * (x) - imu_state.offset_T_L_I
+      //  z   : imu_state.offset_R_L_I.conjugate() * (y)
+  
+
       V3D P_compensate = imu_state.offset_R_L_I.conjugate() * (imu_state.rot.conjugate() * (R_i * (imu_state.offset_R_L_I * P_i + imu_state.offset_T_L_I) + T_ei) - imu_state.offset_T_L_I);// not accurate!
       
       // save Undistorted points and their rotation
